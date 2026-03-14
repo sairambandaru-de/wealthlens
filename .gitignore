@@ -1,0 +1,15 @@
+# Secrets
+.env
+
+# Environments
+venv/
+env/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Database & Logs
+*.db
+*.log
