@@ -13,3 +13,5 @@ __pycache__/
 # Database & Logs
 *.db
 *.log
+webhook.key
+webhook.crt
