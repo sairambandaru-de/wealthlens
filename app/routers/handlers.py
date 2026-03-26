@@ -125,76 +125,85 @@ async def _handle_add_mf(chat_id: int, text: str, state: dict):
     step = state["step"]
     data = state["data"]
 
+    # STEP 1: User enters "Parag Parikh"
     if step == "add_mf_search":
         query = text.strip()
-        # If numeric, treat as scheme code directly
-        if query.isdigit():
-            nav = await fetch_mf_nav(query)
-            if not nav:
-                await send_plain(chat_id, f"❌ No NAV found for scheme code {query}. Try searching by name.")
-                return
-            _set_state(chat_id, "add_mf_units", {"scheme_code": query, "name": f"MF-{query}", "nav": nav})
-            await send_plain(chat_id,
-                f"✅ Scheme {query} — NAV: ₹{nav:.4f}\n\nEnter number of units held:")
-        else:
-            await send_plain(chat_id, "Searching AMFI database...")
-            results = await search_mf_schemes(query)
-            if not results:
-                await send_plain(chat_id,
-                    "❌ No schemes found. Try different keywords or use the AMFI scheme code directly.")
-                _clear_state(chat_id)
-                return
-            msg = "Found these schemes:\n\n"
-            for i, r in enumerate(results, 1):
-                msg += f"{i}. [{r['code']}] {r['name'][:60]}\n   NAV: ₹{r['nav']:.4f}\n\n"
-            msg += "Reply with the scheme code (the number in brackets) to add it:"
-            _set_state(chat_id, "add_mf_code_pick", {"results": results})
-            await send_plain(chat_id, msg)
-
-    elif step == "add_mf_code_pick":
-        code = text.strip()
-        results = data.get("results", [])
-        match = next((r for r in results if r["code"] == code), None)
-        if not match:
-            await send_plain(chat_id, "❌ Invalid code. Please enter one of the codes shown above:")
+        await send_plain(chat_id, f"🔍 Searching for '{query}'...")
+        
+        results = await search_mf_schemes(query) # Now returns ~5-8 results
+        
+        if not results:
+            await send_plain(chat_id, "❌ No funds found. Try a different name (e.g. 'SBI Bluechip').")
             return
-        _set_state(chat_id, "add_mf_units", {
-            "scheme_code": match["code"], "name": match["name"], "nav": match["nav"]
-        })
-        await send_plain(chat_id,
-            f"✅ {match['name'][:60]}\nCurrent NAV: ₹{match['nav']:.4f}\n\nEnter number of units held:")
 
+        # Build a numbered list
+        msg = "Found these variants. Reply with the *Number* (1, 2, 3...):\n\n"
+        for i, r in enumerate(results, 1):
+            # Clean up the name for display
+            display_name = r['name'].replace("Mutual Fund", "").strip()
+            msg += f"{i}. *{display_name}*\n   NAV: ₹{r['nav']:.2f}\n\n"
+        
+        # Save results in state so we know what '1' or '2' refers to later
+        _set_state(chat_id, "add_mf_selection", {"search_results": results})
+        await send_message(chat_id, msg)
+
+    # STEP 2: User enters "1" or "2"
+    elif step == "add_mf_selection":
+        selection = text.strip()
+        search_results = data.get("search_results", [])
+
+        try:
+            idx = int(selection) - 1
+            if idx < 0 or idx >= len(search_results):
+                raise ValueError
+            selected_fund = search_results[idx]
+        except (ValueError, IndexError):
+            await send_plain(chat_id, f"❌ Invalid choice. Please enter a number between 1 and {len(search_results)}:")
+            return
+
+        # Map selection to actual AMFI data
+        _set_state(chat_id, "add_mf_units", {
+            "scheme_code": selected_fund["code"], 
+            "name": selected_fund["name"], 
+            "nav": selected_fund["nav"]
+        })
+        
+        await send_plain(chat_id, 
+            f"✅ Selected: {selected_fund['name']}\n"
+            f"Current NAV: ₹{selected_fund['nav']:.4f}\n\n"
+            f"How many units do you hold?")
+
+    # STEP 3: User enters Units
     elif step == "add_mf_units":
         try:
             units = float(text.strip())
-            assert units > 0
-        except (ValueError, AssertionError):
-            await send_plain(chat_id, "❌ Invalid units. Please enter a positive number:")
+            if units <= 0: raise ValueError
+        except ValueError:
+            await send_plain(chat_id, "❌ Please enter a valid number for units:")
             return
+            
         data["units"] = units
         _set_state(chat_id, "add_mf_avg_nav", data)
-        await send_plain(chat_id,
-            f"Enter your average buy NAV (₹):\n(Current NAV: ₹{data['nav']:.4f})")
+        await send_plain(chat_id, f"Enter your average purchase NAV (₹):\n(Current: ₹{data['nav']:.4f})")
 
+    # STEP 4: User enters Buy NAV
     elif step == "add_mf_avg_nav":
         try:
             avg_nav = float(text.strip().replace(",", ""))
-            assert avg_nav > 0
-        except (ValueError, AssertionError):
-            await send_plain(chat_id, "❌ Invalid NAV. Please enter a positive number:")
+            if avg_nav <= 0: raise ValueError
+        except ValueError:
+            await send_plain(chat_id, "❌ Please enter a valid purchase NAV:")
             return
 
         user_id = db.get_user_id(chat_id)
         ok = db.add_asset(user_id, "mf", data["scheme_code"], data["name"], data["units"], avg_nav)
-        _clear_state(chat_id)
+        
         if ok:
             invested = data["units"] * avg_nav
-            await send_plain(chat_id,
-                f"✅ Added {data['units']} units of {data['name'][:40]} @ ₹{avg_nav:.4f}\n"
-                f"Total invested: ₹{invested:,.2f}")
+            await send_plain(chat_id, f"✅ Successfully added to portfolio!")
         else:
-            await send_plain(chat_id, "❌ Failed to save. Please try again.")
-
+            await send_plain(chat_id, "❌ Database error.")
+        _clear_state(chat_id)
 
 # ─── /remove_asset ────────────────────────────────────────────────────────────
 

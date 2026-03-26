@@ -93,36 +93,21 @@ async def fetch_mf_nav(scheme_code: str) -> float | None:
 
 
 async def search_mf_schemes(query: str) -> list[dict]:
-    """Search for mutual fund schemes by name. Returns list of {code, name, nav}."""
-    global _amfi_loaded
     if not _amfi_loaded:
         await _load_amfi_data()
 
-    query_lower = query.lower()
+    query_words = query.lower().split()
     results = []
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.get(AMFI_NAV_URL)
-            resp.raise_for_status()
-        for line in resp.text.splitlines():
-            parts = line.split(";")
-            if len(parts) >= 5:
-                scheme_code = parts[0].strip()
-                name = parts[3].strip()
-                nav_str = parts[4].strip()
-                if query_lower in name.lower():
-                    try:
-                        results.append({
-                            "code": scheme_code,
-                            "name": name,
-                            "nav": float(nav_str),
-                        })
-                    except ValueError:
-                        pass
-            if len(results) >= 5:
-                break
-    except Exception as e:
-        logger.error(f"MF search error: {e}")
+    
+    for code, name in _amfi_name_cache.items():
+        if all(word in name.lower() for word in query_words):
+            results.append({
+                "code": code,
+                "name": name,
+                "nav": _amfi_nav_cache.get(code, 0.0)
+            })
+        if len(results) >= 6: # Limit to 6 best matches for 1-6 numbering
+            break
     return results
 
 
