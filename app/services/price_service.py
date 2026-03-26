@@ -64,15 +64,19 @@ async def _load_amfi_data():
     global _amfi_loaded, _amfi_nav_cache, _amfi_name_cache
 
     try:
+        logger.info("🚀 Starting AMFI load...")   # 🔥 ADD
+
         async with httpx.AsyncClient(
             timeout=30,
             headers=HEADERS,
-            follow_redirects=True   # ✅ IMPORTANT
+            follow_redirects=True
         ) as client:
             resp = await client.get(AMFI_NAV_URL)
-            resp.raise_for_status()
+
+        logger.info(f"Status: {resp.status_code}")   # 🔥 ADD
 
         lines = resp.text.splitlines()
+        logger.info(f"Lines fetched: {len(lines)}")  # 🔥 ADD
 
         for line in lines:
             parts = line.split(";")
@@ -90,12 +94,11 @@ async def _load_amfi_data():
                     continue
 
         _amfi_loaded = True
-        logger.info(f"AMFI loaded: {len(_amfi_nav_cache)} schemes")
+        logger.info(f"✅ AMFI loaded: {len(_amfi_nav_cache)} schemes")
 
     except Exception as e:
-        logger.error(f"Failed to load AMFI data: {e}")
-        _amfi_loaded = True  # prevent retry loop
-
+        logger.error(f"❌ AMFI load FAILED: {e}", exc_info=True)
+        
 async def fetch_mf_nav(scheme_code: str) -> float | None:
     cached = get_cached_price(scheme_code, "mf")
     if cached:
