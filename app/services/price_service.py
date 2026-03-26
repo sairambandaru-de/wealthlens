@@ -12,6 +12,12 @@ from app.database import get_cached_price, set_cached_price
 logger = logging.getLogger(__name__)
 
 AMFI_NAV_URL = "https://www.amfiindia.com/spages/NAVAll.txt"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/plain",
+    "Connection": "keep-alive"
+}
 
 # In-memory AMFI scheme cache (scheme_code -> nav)
 _amfi_cache: dict[str, float] = {}
@@ -57,7 +63,7 @@ async def fetch_stock_price(symbol: str) -> float | None:
 async def _load_amfi_data():
     global _amfi_cache, _amfi_loaded
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, headers=HEADERS) as client:
             resp = await client.get(AMFI_NAV_URL)
             resp.raise_for_status()
         lines = resp.text.splitlines()
