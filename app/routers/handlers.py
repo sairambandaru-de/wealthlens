@@ -137,15 +137,13 @@ async def _handle_add_mf(chat_id: int, text: str, state: dict):
             return
 
         # Build a numbered list
-        msg = "Found these variants. Reply with the *Number* (1, 2, 3...):\n\n"
+        msg = "Found these variants. Reply with the Number (1, 2, 3...):\n\n"
+
         for i, r in enumerate(results, 1):
-            # Clean up the name for display
             display_name = r['name'].replace("Mutual Fund", "").strip()
-            msg += f"{i}. *{display_name}*\n   NAV: ₹{r['nav']:.2f}\n\n"
-        
-        # Save results in state so we know what '1' or '2' refers to later
-        _set_state(chat_id, "add_mf_selection", {"search_results": results})
-        await send_message(chat_id, msg)
+            msg += f"{i}. {display_name}\n   NAV: ₹{r['nav']:.2f}\n\n"
+
+        await send_plain(chat_id, msg)
 
     # STEP 2: User enters "1" or "2"
     elif step == "add_mf_selection":
