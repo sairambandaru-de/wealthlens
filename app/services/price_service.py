@@ -20,9 +20,9 @@ HEADERS = {
 }
 
 # In-memory AMFI scheme cache (scheme_code -> nav)
-_amfi_cache: dict[str, float] = {}
+_amfi_nav_cache: dict[str, float] = {}
+_amfi_name_cache: dict[str, str] = {}
 _amfi_loaded = False
-
 
 # ─── Stock prices via yfinance ────────────────────────────────────────────────
 
@@ -61,61 +61,86 @@ async def fetch_stock_price(symbol: str) -> float | None:
 # ─── Mutual Fund NAV via AMFI ─────────────────────────────────────────────────
 
 async def _load_amfi_data():
-    global _amfi_cache, _amfi_loaded
+    global _amfi_loaded, _amfi_nav_cache, _amfi_name_cache
+
     try:
-        async with httpx.AsyncClient(timeout=30, headers=HEADERS) as client:
+        async with httpx.AsyncClient(
+            timeout=30,
+            headers=HEADERS,
+            follow_redirects=True   # ✅ IMPORTANT
+        ) as client:
             resp = await client.get(AMFI_NAV_URL)
             resp.raise_for_status()
+
         lines = resp.text.splitlines()
+
         for line in lines:
             parts = line.split(";")
+
             if len(parts) >= 5:
-                scheme_code = parts[0].strip()
+                code = parts[0].strip()
+                name = parts[3].strip()
                 nav_str = parts[4].strip()
+
                 try:
-                    _amfi_cache[scheme_code] = float(nav_str)
+                    nav = float(nav_str)
+                    _amfi_nav_cache[code] = nav
+                    _amfi_name_cache[code] = name
                 except ValueError:
-                    pass
+                    continue
+
         _amfi_loaded = True
-        logger.info(f"AMFI data loaded: {len(_amfi_cache)} schemes")
+        logger.info(f"AMFI loaded: {len(_amfi_nav_cache)} schemes")
+
     except Exception as e:
         logger.error(f"Failed to load AMFI data: {e}")
-
+        _amfi_loaded = True  # prevent retry loop
 
 async def fetch_mf_nav(scheme_code: str) -> float | None:
-    """Fetch NAV for a mutual fund scheme from AMFI."""
     cached = get_cached_price(scheme_code, "mf")
     if cached:
         return cached
 
-    global _amfi_loaded
     if not _amfi_loaded:
         await _load_amfi_data()
 
-    nav = _amfi_cache.get(scheme_code)
+    nav = _amfi_nav_cache.get(scheme_code)
+
     if nav:
         set_cached_price(scheme_code, "mf", nav)
-    return nav
 
+    return nav
 
 async def search_mf_schemes(query: str) -> list[dict]:
     if not _amfi_loaded:
         await _load_amfi_data()
 
-    query_words = query.lower().split()
+    query_lower = query.lower()
     results = []
-    
+
     for code, name in _amfi_name_cache.items():
-        if all(word in name.lower() for word in query_words):
+        name_lower = name.lower()
+
+        # ✅ flexible matching
+        if query_lower in name_lower:
+            nav = _amfi_nav_cache.get(code)
+
+            if not nav:
+                continue
+
             results.append({
                 "code": code,
                 "name": name,
-                "nav": _amfi_nav_cache.get(code, 0.0)
+                "nav": nav
             })
-        if len(results) >= 6: # Limit to 6 best matches for 1-6 numbering
-            break
-    return results
 
+        if len(results) >= 10:
+            break
+
+    # ✅ sort for better UX
+    results = sorted(results, key=lambda x: len(x["name"]))
+
+    return results[:6]
 
 async def get_price(symbol: str, asset_type: str) -> float | None:
     if asset_type == "stock":
