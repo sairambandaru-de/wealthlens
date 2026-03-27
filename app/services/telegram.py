@@ -1,27 +1,30 @@
-import os
-import httpx
 import logging
+from telegram import Bot
 
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+_bot: Bot | None = None
+
+
+def set_bot(bot: Bot):
+    global _bot
+    _bot = bot
 
 
 async def send_message(chat_id: int, text: str, parse_mode: str = "MarkdownV2"):
-    async with httpx.AsyncClient() as client:
-        payload = {
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": parse_mode,
-        }
-        try:
-            resp = await client.post(f"{BASE_URL}/sendMessage", json=payload, timeout=10)
-            if not resp.is_success:
-                logger.error(f"Telegram error: {resp.text}")
-        except Exception as e:
-            logger.error(f"Failed to send message: {e}")
+    if not _bot:
+        logger.error("❌ Bot not initialized")
+        return
+
+    try:
+        await _bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=parse_mode if parse_mode else None,
+        )
+    except Exception as e:
+        logger.error(f"Telegram send failed: {e}")
 
 
 async def send_plain(chat_id: int, text: str):
-    await send_message(chat_id, text, parse_mode="")
+    await send_message(chat_id, text, parse_mode=None)
