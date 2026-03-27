@@ -143,13 +143,21 @@ async def _handle_add_mf(chat_id: int, text: str, state: dict):
             display_name = r['name'].replace("Mutual Fund", "").strip()
             msg += f"{i}. {display_name}\n   NAV: ₹{r['nav']:.2f}\n\n"
 
+        # Save results in state 👇 IMPORTANT
+        _set_state(chat_id, "add_mf_selection", {
+        "search_results": results
+        })
+
         await send_plain(chat_id, msg)
 
     # STEP 2: User enters "1" or "2"
     elif step == "add_mf_selection":
         selection = text.strip()
         search_results = data.get("search_results", [])
-
+        if not search_results:
+            await send_plain(chat_id, "⚠️ Session expired. Please search again.")
+            _set_state(chat_id, "add_mf_search")
+            return
         try:
             idx = int(selection) - 1
             if idx < 0 or idx >= len(search_results):
