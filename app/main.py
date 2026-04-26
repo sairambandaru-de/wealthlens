@@ -1,39 +1,40 @@
 import logging
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-import threading
+from dotenv import load_dotenv
 
 from app.database import init_db
 from app.bot import run_bot
+from app.services.price_service import _load_amfi_data
+from app.services.scheduler import run_scheduler
+# Load environment variables
+load_dotenv()
 
+# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    logger.info("🚀 Starting WealthLens...")
+def main():
+    print("🔥 Starting WealthLens...")
 
+    # Init DB
     init_db()
-    logger.info("✅ Database initialized")
+    print("✅ Database initialized")
 
-    # Start bot in background
-    def start_bot():
-        try:
-            run_bot()
-        except Exception as e:
-            logger.error(f"❌ Bot crashed: {e}", exc_info=True)
+    import asyncio
+    import threading
 
-    threading.Thread(target=start_bot, daemon=True).start()
+    # ✅ Load AMFI once
+    asyncio.run(_load_amfi_data())
 
-    yield
+    # ✅ Start scheduler in background thread
+    #def start_scheduler():
+    #    asyncio.run(run_scheduler())
 
-    logger.info("🛑 Shutting down...")
+    #threading.Thread(target=start_scheduler, daemon=True).start()
+    #print("⏰ Scheduler started")
 
+    # ✅ IMPORTANT: Run bot in MAIN thread
+    run_bot()
 
-app = FastAPI(lifespan=lifespan)
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
+if __name__ == "__main__":
+    main()

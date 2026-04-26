@@ -2,10 +2,7 @@
 Message formatting utilities for Telegram (MarkdownV2).
 """
 
-def esc(text: str) -> str:
-    """Escape special chars for Telegram MarkdownV2."""
-    special = r"\_*[]()~`>#+-=|{}.!"
-    return "".join(f"\\{c}" if c in special else c for c in str(text))
+
 
 
 def fmt_currency(amount: float | None, symbol: str = "₹") -> str:
@@ -23,40 +20,77 @@ def fmt_currency(amount: float | None, symbol: str = "₹") -> str:
 def fmt_pnl(pnl: float | None, pct: float | None) -> str:
     if pnl is None:
         return "N/A"
+
+    emoji = "🟢" if pnl >= 0 else "🔴"
+    return f"{emoji} ₹{pnl:,.0f} ({pct:.2f}%)"
+
+
+def fmt_pnl_bkp(pnl: float | None, pct: float | None) -> str:
+    if pnl is None:
+        return "N/A"
     arrow = "🟢" if pnl >= 0 else "🔴"
     sign = "+" if pnl >= 0 else ""
     pct_str = f" ({sign}{pct:.2f}%)" if pct is not None else ""
     return f"{arrow} {sign}{fmt_currency(pnl)}{pct_str}"
 
-
 def fmt_asset_row(a: dict) -> str:
+    display_name = a.get("name") or a.get("symbol")
+
+    icon = "📊" if a.get("asset_type") == "mf" else "📈"
+
+    return (
+        f"{icon} {display_name}\n"
+        f"Qty: {a['quantity']} | Avg: {fmt_currency(a['avg_price'])} | "
+        f"LTP: {fmt_currency(a['current_price'])}\n"
+        f"P&L: {fmt_pnl(a['pnl'], a['pnl_pct'])}\n\n"
+    )
+
+def fmt_asset_row_bkp(a: dict) -> str:
     price_str = fmt_currency(a.get("current_price"))
     pnl_str = fmt_pnl(a.get("pnl"), a.get("pnl_pct"))
     tag = "📈" if a["asset_type"] == "stock" else "🏦"
     return (
-        f"{tag} *{esc(a['symbol'])}* — {esc(a['name'][:28])}\n"
-        f"   Qty: {esc(str(a['quantity']))} | Avg: {esc(fmt_currency(a['avg_price']))} | "
-        f"LTP: {esc(price_str)}\n"
-        f"   P&L: {esc(pnl_str)}\n"
+        f"{tag} *{a['symbol']}* — {a['name'][:28]}\n"
+        f"   Qty: {str(a['quantity'])} | Avg: {fmt_currency(a['avg_price'])} | "
+        f"LTP: {price_str}\n"
+        f"   P&L: {pnl_str}\n"
     )
 
 
 def build_portfolio_message(portfolio: dict) -> str:
     if not portfolio["assets"]:
-        return "📭 Your portfolio is empty\\. Use /add\\_stock or /add\\_mf to get started\\."
+        return (
+            "📊 Your portfolio is empty\n\n"
+            "➕ Add your first asset:\n"
+            "• /add_stock\n"
+            "• /add_mf"
+        )
 
-    lines = ["*📊 Portfolio Summary*\n"]
+    lines = ["📊 Portfolio Summary\n"]
+
+    # Asset rows
     for a in portfolio["assets"]:
         lines.append(fmt_asset_row(a))
 
     lines.append("─" * 28)
-    lines.append(
-        f"*Invested:* {esc(fmt_currency(portfolio['total_invested']))}\n"
-        f"*Current:*  {esc(fmt_currency(portfolio['total_current']))}\n"
-        f"*Total P&L:* {esc(fmt_pnl(portfolio['total_pnl'], portfolio['total_pnl_pct']))}"
-    )
-    return "\n".join(lines)
 
+    # Totals
+    lines.append(
+        f"💰 Invested: {fmt_currency(portfolio['total_invested'])}\n"
+        f"💼 Current: {fmt_currency(portfolio['total_current'])}\n"
+        f"📈 Total P&L: {fmt_pnl(portfolio['total_pnl'], portfolio['total_pnl_pct'])}"
+    )
+
+    # 👉 Add footer (IMPORTANT)
+    lines.append("\n---\n")
+    lines.append(
+        "⚡ Next:\n"
+        "• /add_stock\n"
+        "• /add_mf\n"
+        "• /assets"
+    )
+
+    return "\n".join(lines)
 
 def build_allocation_message(alloc: dict) -> str:
     if not alloc:

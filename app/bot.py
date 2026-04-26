@@ -1,4 +1,6 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
 import logging
 from telegram import Update
 from telegram.ext import (
@@ -21,10 +23,11 @@ from app.handlers import (
     cmd_bottom,
     cmd_compare,
     handle_text,
+    cmd_remove_asset,
 )
 
-from app.services.telegram import set_bot
-
+from app.services.telegram import set_bot,BOT_LOOP
+import asyncio
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -88,10 +91,7 @@ def run_bot():
         raise ValueError("❌ TELEGRAM_BOT_TOKEN not set")
 
     app = ApplicationBuilder().token(TOKEN).build()
-
-    # IMPORTANT
-    set_bot(app.bot)
-
+    
     # Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("add_stock", add_stock))
@@ -103,9 +103,20 @@ def run_bot():
     app.add_handler(CommandHandler("top", top))
     app.add_handler(CommandHandler("bottom", bottom))
     app.add_handler(CommandHandler("compare", compare))
-
+    app.add_handler(CommandHandler("remove_asset", cmd_remove_asset))
     # Text handler
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+
+    # ✅ FIX: set bot AFTER loop starts
+    async def on_startup(app):
+        from app.services import telegram as tg
+
+        loop = asyncio.get_running_loop()
+        tg.BOT_LOOP = loop        # ✅ correct way
+        set_bot(app.bot)
+        logger.info("✅ Bot initialized with event loop")        
+
+    app.post_init = on_startup
 
     logger.info("🚀 Bot started (polling)...")
     app.run_polling()
