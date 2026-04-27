@@ -75,6 +75,7 @@ def init_db():
     """)
     
     add_nifty_base_column()
+    init_snapshot_table()   # portfolio snapshot table
     conn.commit()
     conn.close()
 
@@ -302,3 +303,135 @@ def get_user_status(telegram_id: int):
     conn.close()
 
     return row[0] if row else None
+
+
+# ─── Portfolio Snapshots ──────────────────────────────────────────────────────
+
+def init_snapshot_table():
+    """Call once from init_db() to create the snapshots table."""
+    conn = get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id             INTEGER NOT NULL REFERENCES users(id),
+                snapshot_date       TEXT NOT NULL,
+                total_invested      REAL NOT NULL,
+                total_current_value REAL NOT NULL,
+                total_pnl           REAL NOT NULL,
+                total_pnl_pct       REAL NOT NULL,
+                stock_value         REAL DEFAULT 0,
+                mf_value            REAL DEFAULT 0,
+                nifty_close         REAL,
+                nifty_change_pct    REAL,
+                asset_count         INTEGER DEFAULT 0,
+                UNIQUE(user_id, snapshot_date)
+            )
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def save_portfolio_snapshot(
+    user_id: int,
+    total_invested: float,
+    total_current_value: float,
+    total_pnl: float,
+    total_pnl_pct: float,
+    stock_value: float,
+    mf_value: float,
+    nifty_close: float,
+    nifty_change_pct: float,
+    asset_count: int,
+    snapshot_date: str = None,   # YYYY-MM-DD, defaults to today
+) -> bool:
+    from datetime import date
+    snap_date = snapshot_date or date.today().isoformat()
+    conn = get_connection()
+    try:
+        conn.execute("""
+            INSERT INTO portfolio_snapshots (
+                user_id, snapshot_date,
+                total_invested, total_current_value,
+                total_pnl, total_pnl_pct,
+                stock_value, mf_value,
+                nifty_close, nifty_change_pct,
+                asset_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, snapshot_date) DO UPDATE SET
+                total_invested      = excluded.total_invested,
+                total_current_value = excluded.total_current_value,
+                total_pnl           = excluded.total_pnl,
+                total_pnl_pct       = excluded.total_pnl_pct,
+                stock_value         = excluded.stock_value,
+                mf_value            = excluded.mf_value,
+                nifty_close         = excluded.nifty_close,
+                nifty_change_pct    = excluded.nifty_change_pct,
+                asset_count         = excluded.asset_count
+        """, (
+            user_id, snap_date,
+            total_invested, total_current_value,
+            total_pnl, total_pnl_pct,
+            stock_value, mf_value,
+            nifty_close, nifty_change_pct,
+            asset_count
+        ))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"❌ Snapshot save error: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_snapshot_n_days_ago(user_id: int, days: int) -> dict | None:
+    """
+    Returns snapshot from exactly N days ago.
+    Used for daily (1), weekly (7), monthly (30) comparisons.
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute("""
+            SELECT *
+            FROM portfolio_snapshots
+            WHERE user_id = ?
+              AND snapshot_date <= date('now', ?)
+            ORDER BY snapshot_date DESC
+            LIMIT 1
+        """, (user_id, f"-{days} days")).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_snapshot_today(user_id: int) -> dict | None:
+    conn = get_connection()
+    try:
+        row = conn.execute("""
+            SELECT * FROM portfolio_snapshots
+            WHERE user_id = ? AND snapshot_date = date('now')
+        """, (user_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+def get_last_trading_snapshot(user_id: int) -> dict | None:
+    """
+    Returns the most recent snapshot before today.
+    Handles weekends + market holidays automatically —
+    just finds the last row that exists.
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute("""
+            SELECT * FROM portfolio_snapshots
+            WHERE user_id = ?
+              AND snapshot_date < date('now')
+            ORDER BY snapshot_date DESC
+            LIMIT 1
+        """, (user_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()

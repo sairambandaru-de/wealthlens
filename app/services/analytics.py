@@ -13,8 +13,298 @@ import math
 logger = logging.getLogger(__name__)
 
 
+async def build_daily_message(
+    user_id: int,
+    snapshot: dict | None,
+    nifty_data: dict | None,
+) -> str:
 
-async def build_daily_message(user_id: int) -> str:
+    if not snapshot:
+        return (
+            "📭 No portfolio found\n\n"
+            "Start tracking:\n"
+            "• /add_stock\n"
+            "• /add_mf"
+        )
+
+    total_current    = snapshot["total_current_value"]
+    total_invested   = snapshot["total_invested"]
+    total_pnl        = snapshot["total_pnl"]
+    total_pnl_pct    = snapshot["total_pnl_pct"]
+    stock_value      = snapshot.get("stock_value", 0.0)
+    mf_value         = snapshot.get("mf_value", 0.0)
+    has_mf           = snapshot.get("has_mf", False)
+    has_stocks       = snapshot.get("has_stocks", False)
+    equity_pct       = snapshot.get("daily_equity_pct")
+    is_first_day     = snapshot.get("is_first_day", False)
+    daily_changes    = snapshot.get("daily_changes", {})
+    nifty_pct        = nifty_data["change_percent"] if nifty_data else None
+
+    # ── Alpha ─────────────────────────────────────────────────────────────────
+    alpha = None
+    if equity_pct is not None and nifty_pct is not None and not is_first_day:
+        alpha = equity_pct - nifty_pct
+    
+    def alpha_label(alpha: float, equity_pct: float) -> str:
+        if alpha > 0.5:
+            return "You beat the market 🎯" if equity_pct >= 0 else "You lost less than market"
+        elif alpha >= -0.5:
+            return "Matched the market"
+        else:
+            return "Market outperformed your equity"
+
+    # ── Formatters ────────────────────────────────────────────────────────────
+    def fmt_inr(x: float) -> str:
+        if abs(x) >= 1_00_00_000:
+            return f"₹{x / 1_00_00_000:.2f}Cr"
+        elif abs(x) >= 1_00_000:
+            return f"₹{x / 1_00_000:.2f}L"
+        return f"₹{x:,.0f}"
+
+    def fmt_pnl_line(pnl: float, pct: float) -> str:
+        dot  = "🟢" if pnl >= 0 else "🔴"
+        sign = "+" if pnl >= 0 else "-"
+        return f"📈 {dot} {sign}{fmt_inr(abs(pnl))} ({sign}{abs(pct):.2f}%)"
+
+    def fmt_pct_line(pct: float | None, label: str, icon: str) -> str:
+        if pct is None:
+            return f"{icon} {label}  ⚪ N/A"
+        dot  = "🟢" if pct >= 0 else "🔴"
+        sign = "+" if pct >= 0 else ""
+        return f"{icon} {label}  {dot} {sign}{pct:.2f}%"
+
+    def fmt_alpha_line(alpha: float) -> str:
+        dot  = "🟢" if alpha >= 0 else "🔴"
+        sign = "+" if alpha >= 0 else ""
+        return f"🔥 Alpha  {dot} {sign}{alpha:.2f}%"
+
+    def fmt_mover(symbol: str, pct: float) -> str:
+        dot  = "🟢" if pct >= 0 else "🔴"
+        sign = "+" if pct >= 0 else ""
+        return f"  {symbol:<12} {dot} {sign}{pct:.2f}%"
+
+    # ── Build message ─────────────────────────────────────────────────────────
+    lines = [
+        "📊 Daily Portfolio Update",
+        "",
+        f"💼 {fmt_inr(total_current)}",
+        f"💰 {fmt_inr(total_invested)}",
+        fmt_pnl_line(total_pnl, total_pnl_pct),
+    ]
+
+    # Breakdown
+    breakdown = []
+    if has_mf:
+        breakdown.append(f"🏦 MF: {fmt_inr(mf_value)}")
+    if has_stocks:
+        breakdown.append(f"📈 Stocks: {fmt_inr(stock_value)}")
+    if breakdown:
+        lines.append("   ".join(breakdown))
+
+    lines.append("")
+
+    # Nifty
+    from datetime import date
+    is_weekend = date.today().weekday() >= 5
+    nifty_label = "Nifty (Fri)" if is_weekend else "Nifty "
+    lines.append(fmt_pct_line(nifty_pct, nifty_label, "📊"))
+
+    # Equity
+    if has_stocks:
+        if is_first_day and equity_pct is not None:
+            dot  = "🟢" if equity_pct >= 0 else "🔴"
+            sign = "+" if equity_pct >= 0 else ""
+            lines.append(f"📉 Equity  {dot} {sign}{equity_pct:.2f}% (since entry)")
+            lines.append("   ⚡ Daily % available from tomorrow")
+        else:
+            lines.append(fmt_pct_line(equity_pct, "Equity", "📉"))
+            
+    # Alpha
+    if alpha is not None:
+        lines.append(fmt_alpha_line(alpha))
+        lines.append(alpha_label(alpha, equity_pct))
+
+    # ── Movers section ────────────────────────────────────────────────────────
+    if has_stocks:
+        movers = get_top_bottom_performers(daily_changes)
+
+        lines.append("")
+        lines.append("🏆 Today's Movers")
+
+        if movers["no_stocks"] or movers["no_data"]:
+            lines.append("  ⚠️ Price data unavailable")
+
+        elif movers["all_zero"]:
+            lines.append("  ⚪ No movement today (holiday?)")
+
+        elif movers["single"]:
+            # Only one stock — show it once
+            entry = movers["top"][0]
+            lines.append(fmt_mover(entry["symbol"], entry["pct"]))
+
+        else:
+            # Top performers
+            lines.append("📈 Top")
+            for e in movers["top"]:
+                lines.append(fmt_mover(e["symbol"], e["pct"]))
+
+            # Bottom performers — skip if same group as top (all tied)
+            if movers["bottom"]:
+                lines.append("📉 Bottom")
+                for e in movers["bottom"]:
+                    lines.append(fmt_mover(e["symbol"], e["pct"]))
+
+        # Skipped note
+        if movers.get("skipped", 0) > 0:
+            lines.append(f"  ℹ️ {movers['skipped']} stock(s) price unavailable")
+
+    # MF note
+    if has_mf:
+        lines.append("")
+        lines.append("ℹ️ MF values based on latest NAV")
+
+    lines += [
+        "---",
+        "⚡ /add_stock  ➕ /add_mf",
+        "📊 /portfolio  📁 /assets",
+    ]
+
+    return "\n".join(lines)
+
+
+async def build_daily_message_1(
+    user_id: int,
+    snapshot: dict | None,
+    nifty_data: dict | None,
+) -> str:
+    """
+    Builds the daily Telegram message from pre-computed snapshot.
+
+    Cases handled:
+      - Empty portfolio
+      - MF only (no equity line, no alpha)
+      - Stocks only
+      - Mixed MF + Stocks
+      - Nifty fetch failed
+      - First day (no yesterday snapshot → equity daily pct = None)
+      - All positive / all negative / mixed directions
+    """
+
+    # ── Case: empty portfolio ─────────────────────────────────────────────────
+    if not snapshot:
+        return (
+            "📭 No portfolio found\n\n"
+            "Start tracking:\n"
+            "• /add_stock\n"
+            "• /add_mf"
+        )
+
+    total_current  = snapshot["total_current_value"]
+    total_invested = snapshot["total_invested"]
+    total_pnl      = snapshot["total_pnl"]
+    total_pnl_pct  = snapshot["total_pnl_pct"]
+    stock_value    = snapshot.get("stock_value", 0.0)
+    mf_value       = snapshot.get("mf_value", 0.0)
+    has_mf         = snapshot.get("has_mf", False)
+    has_stocks     = snapshot.get("has_stocks", False)
+
+    # daily equity % — None on first day or MF-only
+    equity_pct     = snapshot.get("daily_equity_pct")   # may be None
+
+    # Nifty — may be None if fetch failed
+    nifty_pct      = nifty_data["change_percent"] if nifty_data else None
+
+    # ── Alpha: only when both equity and nifty are available ─────────────────
+    alpha = None
+    if equity_pct is not None and nifty_pct is not None:
+        alpha = equity_pct - nifty_pct
+
+    # ── Alpha message — covers all sign combinations ──────────────────────────
+    def alpha_label(alpha: float, equity_pct: float, nifty_pct: float) -> str:
+        if alpha > 0.5:
+            if equity_pct >= 0:
+                return "You beat the market 🎯"
+            else:
+                return "You lost less than market"   # both red, you better
+        elif alpha >= -0.5:
+            return "Matched the market"
+        else:
+            return "Market outperformed your equity"  # you lagged
+
+    # ── Formatters ────────────────────────────────────────────────────────────
+    def fmt_inr(x: float) -> str:
+        if abs(x) >= 1_00_00_000:
+            return f"₹{x / 1_00_00_000:.2f}Cr"
+        elif abs(x) >= 1_00_000:
+            return f"₹{x / 1_00_000:.2f}L"
+        return f"₹{x:,.0f}"
+
+    def fmt_pnl_line(pnl: float, pct: float) -> str:
+        dot  = "🟢" if pnl >= 0 else "🔴"
+        sign = "+" if pnl >= 0 else "-"
+        return f"📈 {dot} {sign}{fmt_inr(abs(pnl))} ({sign}{abs(pct):.2f}%)"
+
+    def fmt_pct_line(pct: float | None, label: str, icon: str) -> str:
+        if pct is None:
+            return f"{icon} {label}  ⚪ N/A"
+        dot  = "🟢" if pct >= 0 else "🔴"
+        sign = "+" if pct >= 0 else ""
+        return f"{icon} {label}  {dot} {sign}{pct:.2f}%"
+
+    def fmt_alpha_line(alpha: float) -> str:
+        dot  = "🟢" if alpha >= 0 else "🔴"
+        sign = "+" if alpha >= 0 else ""
+        return f"🔥 Alpha  {dot} {sign}{alpha:.2f}%"
+
+    # ── Build message ─────────────────────────────────────────────────────────
+    lines = [
+        "📊 Daily Portfolio Update",
+        "",
+        f"💼 {fmt_inr(total_current)}",
+        f"💰 {fmt_inr(total_invested)}",
+        fmt_pnl_line(total_pnl, total_pnl_pct),
+    ]
+
+    # Breakdown: MF + Stocks — only show what exists
+    breakdown = []
+    if has_mf:
+        breakdown.append(f"🏦 MF: {fmt_inr(mf_value)}")
+    if has_stocks:
+        breakdown.append(f"📈 Stocks: {fmt_inr(stock_value)}")
+    if breakdown:
+        lines.append("   ".join(breakdown))
+
+    lines.append("")
+
+    # Nifty — always show (N/A if failed)
+    lines.append(fmt_pct_line(nifty_pct, "Nifty ", "📊"))
+
+    # Equity — only show if user has stocks
+    # If first day (equity_pct None) still show N/A so user knows it's coming
+    if has_stocks:
+        lines.append(fmt_pct_line(equity_pct, "Equity", "📉"))
+
+    # Alpha — only when both equity and nifty available
+    if alpha is not None:
+        lines.append(fmt_alpha_line(alpha))
+        lines.append(alpha_label(alpha, equity_pct, nifty_pct))
+
+    # MF note
+    if has_mf:
+        lines.append("")
+        lines.append("ℹ️ MF values based on latest NAV")
+
+    lines += [
+        "---",
+        "⚡ /add_stock  ➕ /add_mf",
+        "📊 /portfolio  📁 /assets",
+    ]
+
+    return "\n".join(lines)
+
+
+
+async def build_daily_message_bkp(user_id: int) -> str:
 
     assets = get_assets(user_id)
 
@@ -525,3 +815,96 @@ def top_performers(portfolio: dict, n: int = 3) -> list[dict]:
 def bottom_performers(portfolio: dict, n: int = 3) -> list[dict]:
     ranked = [a for a in portfolio["assets"] if a.get("pnl_pct") is not None]
     return sorted(ranked, key=lambda x: x["pnl_pct"])[:n]
+
+def get_top_bottom_performers(
+    daily_changes: dict[str, float | None]
+) -> dict:
+    """
+    Pure function — no API calls.
+    Handles all scenarios:
+      - All positive / all negative / mixed
+      - Ties at top or bottom (show all tied)
+      - Single stock
+      - All zero (holiday/no movement)
+      - All None (fetch failed)
+      - Empty (no stocks)
+
+    Returns:
+    {
+        top:        [{"symbol": str, "pct": float}, ...],
+        bottom:     [{"symbol": str, "pct": float}, ...],
+        all_zero:   bool,
+        no_data:    bool,
+        no_stocks:  bool,
+        single:     bool,   # only one stock in portfolio
+        skipped:    int,    # count of symbols where price fetch failed
+    }
+    """
+
+    # ── No stocks at all ──────────────────────────────────────────────────────
+    if not daily_changes:
+        return {
+            "top": [], "bottom": [], "all_zero": False,
+            "no_data": False, "no_stocks": True,
+            "single": False, "skipped": 0,
+        }
+
+    total   = len(daily_changes)
+    valid   = {s: p for s, p in daily_changes.items() if p is not None}
+    skipped = total - len(valid)
+
+    # ── All prices failed ─────────────────────────────────────────────────────
+    if not valid:
+        return {
+            "top": [], "bottom": [], "all_zero": False,
+            "no_data": True, "no_stocks": False,
+            "single": False, "skipped": skipped,
+        }
+
+    # ── All zero — holiday or no movement ─────────────────────────────────────
+    if all(abs(p) < 0.001 for p in valid.values()):
+        return {
+            "top": [], "bottom": [], "all_zero": True,
+            "no_data": False, "no_stocks": False,
+            "single": len(valid) == 1, "skipped": skipped,
+        }
+
+    # ── Single stock ──────────────────────────────────────────────────────────
+    if len(valid) == 1:
+        symbol, pct = next(iter(valid.items()))
+        entry = [{"symbol": symbol, "pct": round(pct, 2)}]
+        return {
+            "top": entry, "bottom": entry, "all_zero": False,
+            "no_data": False, "no_stocks": False,
+            "single": True, "skipped": skipped,
+        }
+
+    # ── Sort: highest % first ─────────────────────────────────────────────────
+    ranked = sorted(valid.items(), key=lambda x: x[1], reverse=True)
+
+    # ── Top: best performer + all ties at that level ──────────────────────────
+    best_pct = ranked[0][1]
+    top = [
+        {"symbol": s, "pct": round(p, 2)}
+        for s, p in ranked
+        if abs(p - best_pct) < 0.001
+    ]
+
+    # ── Bottom: worst performer + all ties at that level ─────────────────────
+    worst_pct = ranked[-1][1]
+    bottom = [
+        {"symbol": s, "pct": round(p, 2)}
+        for s, p in ranked
+        if abs(p - worst_pct) < 0.001
+    ]
+
+    # ── Edge: top and bottom are same group (all tied) ────────────────────────
+    # e.g. 3 stocks all at +1.00% — top == bottom, show once
+    if best_pct == worst_pct:
+        bottom = []
+
+    return {
+        "top": top, "bottom": bottom, "all_zero": False,
+        "no_data": False, "no_stocks": False,
+        "single": False, "skipped": skipped,
+    }

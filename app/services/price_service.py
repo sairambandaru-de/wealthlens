@@ -273,3 +273,54 @@ async def get_price(symbol: str, asset_type: str) -> float | None:
 
 def get_mf_nav(code: str):
     return _amfi_nav_cache.get(code)
+
+async def fetch_daily_stock_changes(assets: list[dict]) -> dict[str, float | None]:
+    """
+    Fetch today vs yesterday % change for each stock asset.
+    Uses yfinance period='5d' to handle weekends/holidays safely.
+    Returns {symbol: daily_pct} — None if price unavailable.
+    """
+    import yfinance as yf
+
+    stock_assets = [a for a in assets if a.get("asset_type") == "stock"]
+    if not stock_assets:
+        return {}
+
+    result: dict[str, float | None] = {}
+
+    def _fetch_change(symbol: str) -> float | None:
+        candidates = (
+            [symbol] if symbol.endswith((".NS", ".BO"))
+            else [f"{symbol}.NS", f"{symbol}.BO"]
+        )
+        for ticker_sym in candidates:
+            try:
+                hist = yf.Ticker(ticker_sym).history(period="5d")
+
+                # Need at least 2 trading days
+                if len(hist) < 2:
+                    continue
+
+                prev_close    = float(hist["Close"].iloc[-2])
+                today_close   = float(hist["Close"].iloc[-1])
+
+                if prev_close <= 0:
+                    continue
+
+                return ((today_close - prev_close) / prev_close) * 100
+
+            except Exception:
+                continue
+        return None
+
+    # Fetch all stocks concurrently
+    async def _fetch_all():
+        tasks = {
+            a["symbol"]: asyncio.to_thread(_fetch_change, a["symbol"])
+            for a in stock_assets
+        }
+        for symbol, coro in tasks.items():
+            result[symbol] = await coro
+
+    await _fetch_all()
+    return result
